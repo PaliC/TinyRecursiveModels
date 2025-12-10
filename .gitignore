@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE/Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Machine Learning / Training
+data/
+outputs/
+multirun/
+checkpoints/
+runs/
+logs/
+
+# Weights & Biases
+.wandb/
+wandb/
+
+# Hydra metadata
+.hydra/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.log
+
+# macOS
+.DS_Store
+.AppleDouble/
+.LSOverride
+
+# Windows
+Thumbs.db
+
+# syncing
+sync.sh
