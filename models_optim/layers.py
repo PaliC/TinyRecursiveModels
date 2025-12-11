@@ -30,34 +30,19 @@ def rotate_half(x: torch.Tensor):
 
 def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
     # q, k: [bs, seq_len, num_heads, head_dim]
-    # cos, sin: [seq_len, head_dim]
-    orig_dtype = q.dtype
-    q = q.to(cos.dtype)
-    k = k.to(cos.dtype)
-
+    # cos, sin: [seq_len, head_dim] - now in same dtype as q, k
     q_embed = (q * cos.unsqueeze(-2)) + (rotate_half(q) * sin.unsqueeze(-2))
     k_embed = (k * cos.unsqueeze(-2)) + (rotate_half(k) * sin.unsqueeze(-2))
+    return q_embed, k_embed
 
-    return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
 
-
-class CastedLinear(nn.Module):
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 bias: bool):
-        super().__init__()
-        # Truncated LeCun normal init
-        self.weight = nn.Parameter(
-            trunc_normal_init_(torch.empty((out_features, in_features)), std=1.0 / (in_features ** 0.5))
-        )
-        self.bias = None
-        if bias:
-            # Zero init bias
-            self.bias = nn.Parameter(torch.zeros((out_features, )))
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return F.linear(input, self.weight.to(input.dtype), bias=self.bias.to(input.dtype) if self.bias is not None else None)
+def CastedLinear(in_features: int, out_features: int, bias: bool) -> nn.Linear:
+    """Factory that returns nn.Linear with truncated normal init."""
+    linear = nn.Linear(in_features, out_features, bias=bias, dtype=torch.bfloat16)
+    trunc_normal_init_(linear.weight, std=1.0 / (in_features ** 0.5))
+    if bias:
+        nn.init.zeros_(linear.bias)
+    return linear
 
 
 class CastedEmbedding(nn.Module):
@@ -67,30 +52,26 @@ class CastedEmbedding(nn.Module):
                  init_std: float,
                  cast_to: torch.dtype):
         super().__init__()
-        self.cast_to = cast_to
-
-        # Truncated LeCun normal init
+        # Store weights in target dtype directly
         self.embedding_weight = nn.Parameter(
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std)
+            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim), dtype=cast_to), std=init_std)
         )
         
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return F.embedding(input, self.embedding_weight.to(self.cast_to))
+        return F.embedding(input, self.embedding_weight)
 
 
 class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, max_position_embeddings, base, device=None):
+    def __init__(self, dim, max_position_embeddings, base, device=None, dtype=torch.bfloat16):
         super().__init__()
 
-        # RoPE
+        # RoPE - compute in fp32, store in target dtype
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
         t = torch.arange(max_position_embeddings, dtype=torch.float32, device=device)
         freqs = torch.outer(t, inv_freq)
-
-        # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.cos_cached = nn.Buffer(emb.cos(), persistent=False)
-        self.sin_cached = nn.Buffer(emb.sin(), persistent=False)
+        self.cos_cached = nn.Buffer(emb.cos().to(dtype), persistent=False)
+        self.sin_cached = nn.Buffer(emb.sin().to(dtype), persistent=False)
 
     def forward(self):
         return self.cos_cached, self.sin_cached
@@ -161,9 +142,5 @@ class SwiGLU(nn.Module):
         return self.down_proj(F.silu(gate) * up)
 
 def rms_norm(hidden_states: torch.Tensor, variance_epsilon: float) -> torch.Tensor:
-    input_dtype = hidden_states.dtype
-    hidden_states = hidden_states.to(torch.float32)
-
     variance = hidden_states.square().mean(-1, keepdim=True)
-    hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
-    return hidden_states.to(input_dtype)
+    return hidden_states * torch.rsqrt(variance + variance_epsilon)
