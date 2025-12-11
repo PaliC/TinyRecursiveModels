@@ -26,10 +26,8 @@ Installation should take a few minutes. For the smallest experiments on Sudoku-E
 - Cuda 12.6.0 (or similar)
 
 ```bash
-pip install --upgrade pip wheel setuptools
-pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126 # install torch based on your cuda version
-pip install -r requirements.txt # install requirements
-pip install --no-cache-dir --no-build-isolation adam-atan2 
+pip install uv
+uv sync
 wandb login YOUR-LOGIN # login if you want the logger to sync results to your Weights & Biases (https://wandb.ai/)
 ```
 
@@ -37,14 +35,14 @@ wandb login YOUR-LOGIN # login if you want the logger to sync results to your We
 
 ```bash
 # ARC-AGI-1
-python -m dataset.build_arc_dataset \
+uv run python -m dataset.build_arc_dataset \
   --input-file-prefix kaggle/combined/arc-agi \
   --output-dir data/arc1concept-aug-1000 \
   --subsets training evaluation concept \
   --test-set-name evaluation
 
 # ARC-AGI-2
-python -m dataset.build_arc_dataset \
+uv run python -m dataset.build_arc_dataset \
   --input-file-prefix kaggle/combined/arc-agi \
   --output-dir data/arc2concept-aug-1000 \
   --subsets training2 evaluation2 concept \
@@ -53,10 +51,10 @@ python -m dataset.build_arc_dataset \
 ## Note: You cannot train on both ARC-AGI-1 and ARC-AGI-2 and evaluate them both because ARC-AGI-2 training data contains some ARC-AGI-1 eval data
 
 # Sudoku-Extreme
-python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1000  --subsample-size 1000 --num-aug 1000  # 1000 examples, 1000 augments
+uv run python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1000  --subsample-size 1000 --num-aug 1000  # 1000 examples, 1000 augments
 
 # Maze-Hard
-python dataset/build_maze_dataset.py # 1000 examples, 8 augments
+uv run python dataset/build_maze_dataset.py # 1000 examples, 8 augments
 ```
 
 ## Experiments
@@ -65,7 +63,7 @@ python dataset/build_maze_dataset.py # 1000 examples, 8 augments
 
 ```bash
 run_name="pretrain_mlp_t_sudoku"
-python pretrain.py \
+uv run python pretrain.py \
 arch=trm \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 evaluators="[]" \
@@ -79,7 +77,7 @@ arch.H_cycles=3 arch.L_cycles=6 \
 Expected: Around 87% exact-accuracy (+- 2%)
 
 run_name="pretrain_att_sudoku"
-python pretrain.py \
+uv run python pretrain.py \
 arch=trm \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 evaluators="[]" \
@@ -98,7 +96,7 @@ Expected: Around 75% exact-accuracy (+- 2%)
 
 ```bash
 run_name="pretrain_att_maze30x30"
-torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
+uv run torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
 arch=trm \
 data_paths="[data/maze-30x30-hard-1k]" \
 evaluators="[]" \
@@ -115,7 +113,7 @@ Actually, you can run Maze-Hard with 1 L40S GPU by reducing the batch-size with 
 
 ```bash
 run_name="pretrain_att_maze30x30_1gpu"
-python pretrain.py \
+uv run python pretrain.py \
 arch=trm \
 data_paths="[data/maze-30x30-hard-1k]" \
 evaluators="[]" \
@@ -133,7 +131,7 @@ arch.H_cycles=3 arch.L_cycles=4 \
 
 ```bash
 run_name="pretrain_att_arc1concept_4"
-torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
+uv run torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
 arch=trm \
 data_paths="[data/arc1concept-aug-1000]" \
 arch.L_layers=2 \
@@ -148,7 +146,7 @@ arch.H_cycles=3 arch.L_cycles=4 \
 
 ```bash
 run_name="pretrain_att_arc2concept_4"
-torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
+uv run torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
 arch=trm \
 data_paths="[data/arc2concept-aug-1000]" \
 arch.L_layers=2 \

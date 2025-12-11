@@ -77,3 +77,4 @@ Thumbs.db
 
 # syncing
 sync.sh
+traces/

@@ -5,6 +5,9 @@ import math
 import yaml
 import shutil
 import copy
+import datetime
+import random
+import numpy as np
 
 import torch
 import torch.distributed as dist
@@ -12,7 +15,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 import tqdm
-import wandb
+# import wandb
 import coolname
 import hydra
 import pydantic
@@ -23,6 +26,7 @@ from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMeta
 from utils.functions import load_model_class, get_model_source_path
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from models.ema import EMAHelper
+from torch.profiler import profile, ProfilerActivity, record_function
 
 
 class LossConfig(pydantic.BaseModel):
@@ -69,11 +73,12 @@ class PretrainConfig(pydantic.BaseModel):
     # Names
     project_name: Optional[str] = None
     run_name: Optional[str] = None
+    name_suffix: Optional[str] = None
     load_checkpoint: Optional[str] = None
     checkpoint_path: Optional[str] = None
 
     # Extras
-    seed: int = 0
+    seed: int = 33
     checkpoint_every_eval: bool = False
     eval_interval: Optional[int] = None
     min_eval_interval: Optional[int] = 0 # when to start eval
@@ -486,7 +491,7 @@ def evaluate(
     return reduced_metrics
 
 def save_code_and_config(config: PretrainConfig):
-    if config.checkpoint_path is None or wandb.run is None:
+    if config.checkpoint_path is None: # or wandb.run is None:
         return
 
     os.makedirs(config.checkpoint_path, exist_ok=True)
@@ -508,7 +513,7 @@ def save_code_and_config(config: PretrainConfig):
         yaml.dump(config.model_dump(), f)
 
     # Log code
-    wandb.run.log_code(config.checkpoint_path)
+    # wandb.run.log_code(config.checkpoint_path)
 
 
 def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> PretrainConfig:
@@ -521,6 +526,14 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
             config.project_name = f"{os.path.basename(config.data_paths[0]).capitalize()}-ACT-torch"
         if config.run_name is None:
             config.run_name = f"{config.arch.name.split('@')[-1]} {coolname.generate_slug(2)}"
+        
+        # Append timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        config.run_name = f"{config.run_name}_{timestamp}"
+
+        if config.name_suffix is not None:
+             config.run_name = f"{config.run_name}_{config.name_suffix}"
+
         if config.checkpoint_path is None:
             config.checkpoint_path = os.path.join("checkpoints", config.project_name, config.run_name)
 
@@ -558,7 +571,11 @@ def launch(hydra_config: DictConfig):
     config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)
 
     # Seed RNGs to ensure consistency
-    torch.random.manual_seed(config.seed + RANK)
+    seed = config.seed + RANK
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     # Dataset
     train_epochs_per_iter = config.eval_interval if config.eval_interval is not None else config.epochs
@@ -587,8 +604,8 @@ def launch(hydra_config: DictConfig):
     ema_helper = None
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
-        wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
-        wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
+        # wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
+        # wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
         save_code_and_config(config)
     if config.ema:
         print('Setup EMA')
@@ -602,16 +619,16 @@ def launch(hydra_config: DictConfig):
         ############ Train Iter
         if RANK == 0:
             print("TRAIN")
-        train_state.model.train()
-        for set_name, batch, global_batch_size in train_loader:
-            metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+        with profile(profile_memory=True, activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+            train_state.model.train()
+            for set_name, batch, global_batch_size in train_loader:
+                metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
 
-            if RANK == 0 and metrics is not None:
-                wandb.log(metrics, step=train_state.step)
-                progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
+                if RANK == 0 and metrics is not None:
+                    # wandb.log(metrics, step=train_state.step)
+                    progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
             if config.ema:
                 ema_helper.update(train_state.model)
-
         if _iter_id >= config.min_eval_interval:
             ############ Evaluation
             if RANK == 0:
@@ -623,17 +640,18 @@ def launch(hydra_config: DictConfig):
             else:
                 train_state_eval = train_state
             train_state_eval.model.eval()
-            metrics = evaluate(config, 
-                train_state_eval, 
-                eval_loader, 
-                eval_metadata, 
-                evaluators,
-                rank=RANK, 
-                world_size=WORLD_SIZE,
-                cpu_group=CPU_PROCESS_GROUP)
+            # metrics = evaluate(config, 
+            #     train_state_eval, 
+            #     eval_loader, 
+            #     eval_metadata, 
+            #     evaluators,
+            #     rank=RANK, 
+            #     world_size=WORLD_SIZE,
+            #     cpu_group=CPU_PROCESS_GROUP)
 
             if RANK == 0 and metrics is not None:
-                wandb.log(metrics, step=train_state.step)
+                # wandb.log(metrics, step=train_state.step)
+                pass
                 
             ############ Checkpointing
             if RANK == 0:
@@ -645,9 +663,20 @@ def launch(hydra_config: DictConfig):
                 del train_state_eval
 
     # finalize
+    # finalize
+    # Save trace to checkpoint directory
+    if config.checkpoint_path is not None:
+        trace_dir = os.path.join(config.checkpoint_path, "traces")
+        os.makedirs(trace_dir, exist_ok=True)
+        prof.export_chrome_trace(os.path.join(trace_dir, f"trace_step_{train_state.step}.json"))
+    else:
+        # Fallback if no checkpoint path
+        os.makedirs("./traces", exist_ok=True)
+        prof.export_chrome_trace(f"./traces/trace_step_{train_state.step}.json")
+
     if dist.is_initialized():
         dist.destroy_process_group()
-    wandb.finish()
+    # wandb.finish()
 
 
 if __name__ == "__main__":
