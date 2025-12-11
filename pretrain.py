@@ -136,7 +136,11 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
         model: nn.Module = model_cls(model_cfg)
         print(model)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
+        if "CUDA_GRAPHS" in os.environ:
+            print("Compiling with CUDA graphs")
+            model = torch.compile(model, mode="reduce-overhead", fullgraph=True)
         if "DISABLE_COMPILE" not in os.environ:
+            print("Compiling with torch.compile default")
             model = torch.compile(model)  # type: ignore
 
         # Load checkpoint

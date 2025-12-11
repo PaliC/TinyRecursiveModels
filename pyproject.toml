@@ -26,6 +26,7 @@ dependencies = [
     "triton==3.3.0",
     "numpy>=1.26.0",
     "adam_atan2_pytorch",
+    "matplotlib==3.10.7",
 ]
 
 [tool.uv]

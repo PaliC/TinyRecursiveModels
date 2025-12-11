@@ -18,9 +18,12 @@ from omegaconf import DictConfig
 from adam_atan2_pytorch import AdamAtan2
 
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
-from utils.functions import load_model_class, get_model_source_path
+from utils.functions import load_model_class
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from torch.profiler import profile, ProfilerActivity, record_function
+from compare_checkpoints import verify_checkpoint, assert_checkpoints_equal
+from utils.functions import load_optim_model_class
+load_models_class = load_optim_model_class
 
 
 # ============== Configuration ==============
@@ -40,7 +43,6 @@ def set_deterministic(seed: int):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-    torch.use_deterministic_algorithms(True)
 
 
 class LossConfig(pydantic.BaseModel):
@@ -95,6 +97,15 @@ class PretrainConfig(pydantic.BaseModel):
     ema_rate: float = 0.999
     freeze_weights: bool = False
 
+    # Checkpoint verification
+    # todo change this!!!
+    # mlp
+    reference_checkpoint: Optional[str] = '/home/simon/palic/TinyRecursiveModels/checkpoints/profile_20251211_045622_baseline_eager/step_15.pt'  # Path to reference checkpoint for verification
+    # attn
+    # reference_checkpoint: Optional[str] = '/home/simon/palic/TinyRecursiveModels/checkpoints/profile_20251211_160751_baseline_eager_attn/step_15.pt'
+    verify_atol: float = 1e-6  # Absolute tolerance for verification
+    verify_rtol: float = 1e-5  # Relative tolerance for verification
+
 
 @dataclass
 class TrainState:
@@ -139,8 +150,17 @@ def create_model(config: PretrainConfig, metadata: PuzzleDatasetMetadata):
     with torch.device("cuda"):
         model: nn.Module = model_cls(model_cfg)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)
-        if "DISABLE_COMPILE" not in os.environ:
+        if "MAX_AUTOTUNE" in os.environ:
+            print("Compiling with max autotune")
+            model = torch.compile(model, mode="max-autotune")
+        elif "CUDA_GRAPHS" in os.environ:
+            print("Compiling with CUDA graphs")
+            model = torch.compile(model, mode="reduce-overhead", fullgraph=True)
+        elif "DISABLE_COMPILE" not in os.environ:
+            print("Compiling with torch.compile default")
             model = torch.compile(model)
+        else:
+            print("Not compiling")
 
         if config.load_checkpoint:
             state_dict = torch.load(config.load_checkpoint, map_location="cuda")
@@ -240,7 +260,15 @@ def main(hydra_config: DictConfig):
         print(f"  step {i+1}/{WARMUP_STEPS}")
 
     torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
     print(f"\nProfiling ({PROFILE_STEPS} steps)...")
+
+    # Create trace directory
+    trace_dir = os.path.join(config.checkpoint_path, "traces")
+    os.makedirs(trace_dir, exist_ok=True)
+
+    # Start memory snapshot recording
+    torch.cuda.memory._record_memory_history(max_entries=100000)
 
     # Profile
     with profile(
@@ -258,23 +286,29 @@ def main(hydra_config: DictConfig):
 
     torch.cuda.synchronize()
 
-    # Save results
-    trace_dir = os.path.join(config.checkpoint_path, "traces")
-    os.makedirs(trace_dir, exist_ok=True)
+    # Dump memory snapshot
+    snapshot_path = os.path.join(trace_dir, "memory_snapshot.pickle")
+    torch.cuda.memory._dump_snapshot(snapshot_path)
+    torch.cuda.memory._record_memory_history(enabled=None)
 
+    # Save chrome trace
     trace_path = os.path.join(trace_dir, "trace.json")
     prof.export_chrome_trace(trace_path)
 
-    print(f"\n{'='*50}")
-    print("CUDA Time (Top 15)")
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=15))
+    # Print memory stats
+    peak_memory_gb = torch.cuda.max_memory_allocated() / (1024 ** 3)
+    peak_reserved_gb = torch.cuda.max_memory_reserved() / (1024 ** 3)
 
-    print("\nMemory (Top 15)")
-    print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=15))
+    print(f"\n{'='*50}")
+    print(f"Peak CUDA memory allocated: {peak_memory_gb:.2f} GB")
+    print(f"Peak CUDA memory reserved:  {peak_reserved_gb:.2f} GB")
+    print(f"{'='*50}")
 
     # Save summary
     summary_path = os.path.join(trace_dir, "summary.txt")
     with open(summary_path, "w") as f:
+        f.write(f"Peak CUDA memory allocated: {peak_memory_gb:.2f} GB\n")
+        f.write(f"Peak CUDA memory reserved:  {peak_reserved_gb:.2f} GB\n\n")
         f.write("=== CUDA Time ===\n")
         f.write(prof.key_averages().table(sort_by="cuda_time_total", row_limit=50))
         f.write("\n\n=== CPU Time ===\n")
@@ -286,9 +320,34 @@ def main(hydra_config: DictConfig):
 
     print(f"\nTrace: {trace_path}")
     print(f"Summary: {summary_path}")
+    print(f"Memory snapshot: {snapshot_path}")
+    print(f"  -> Visualize at: https://pytorch.org/memory_viz")
 
     # Checkpoint
     save_checkpoint(config, state)
+
+    # Verify checkpoint against reference if provided
+    if config.reference_checkpoint:
+        checkpoint_path = os.path.join(config.checkpoint_path, f"step_{state.step}.pt")
+        is_valid = verify_checkpoint(
+            checkpoint_path,
+            config.reference_checkpoint,
+            atol=config.verify_atol,
+            rtol=config.verify_rtol,
+        )
+        if not is_valid:
+            print("WARNING: Checkpoint verification FAILED!")
+    elif os.environ.get("REFERENCE_CHECKPOINT"):
+        # Also support via environment variable
+        checkpoint_path = os.path.join(config.checkpoint_path, f"step_{state.step}.pt")
+        is_valid = verify_checkpoint(
+            checkpoint_path,
+            os.environ["REFERENCE_CHECKPOINT"],
+            atol=config.verify_atol,
+            rtol=config.verify_rtol,
+        )
+        if not is_valid:
+            print("WARNING: Checkpoint verification FAILED!")
 
     print(f"\n{'='*50}")
     print("DONE")
