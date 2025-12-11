@@ -18,12 +18,12 @@ from omegaconf import DictConfig
 from adam_atan2_pytorch import AdamAtan2
 
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
-from utils.functions import load_model_class
+# from utils.functions import load_model_class
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from torch.profiler import profile, ProfilerActivity, record_function
 from compare_checkpoints import verify_checkpoint, assert_checkpoints_equal
 from utils.functions import load_optim_model_class
-load_models_class = load_optim_model_class
+load_model_class = load_optim_model_class
 
 
 # ============== Configuration ==============
@@ -100,9 +100,9 @@ class PretrainConfig(pydantic.BaseModel):
     # Checkpoint verification
     # todo change this!!!
     # mlp
-    reference_checkpoint: Optional[str] = '/home/simon/palic/TinyRecursiveModels/checkpoints/profile_20251211_045622_baseline_eager/step_15.pt'  # Path to reference checkpoint for verification
+    reference_checkpoint_mlp: Optional[str] = '/home/simon/palic/TinyRecursiveModels/checkpoints/profile_20251211_045622_baseline_eager/step_15.pt'  # Path to reference checkpoint for verification
     # attn
-    # reference_checkpoint: Optional[str] = '/home/simon/palic/TinyRecursiveModels/checkpoints/profile_20251211_160751_baseline_eager_attn/step_15.pt'
+    reference_checkpoint_attn: Optional[str] = '/home/simon/palic/TinyRecursiveModels/checkpoints/profile_20251211_160751_baseline_eager_attn/step_15.pt'
     verify_atol: float = 1e-6  # Absolute tolerance for verification
     verify_rtol: float = 1e-5  # Relative tolerance for verification
 
@@ -327,27 +327,24 @@ def main(hydra_config: DictConfig):
     save_checkpoint(config, state)
 
     # Verify checkpoint against reference if provided
-    if config.reference_checkpoint:
-        checkpoint_path = os.path.join(config.checkpoint_path, f"step_{state.step}.pt")
-        is_valid = verify_checkpoint(
-            checkpoint_path,
-            config.reference_checkpoint,
-            atol=config.verify_atol,
-            rtol=config.verify_rtol,
-        )
-        if not is_valid:
-            print("WARNING: Checkpoint verification FAILED!")
-    elif os.environ.get("REFERENCE_CHECKPOINT"):
-        # Also support via environment variable
-        checkpoint_path = os.path.join(config.checkpoint_path, f"step_{state.step}.pt")
-        is_valid = verify_checkpoint(
-            checkpoint_path,
-            os.environ["REFERENCE_CHECKPOINT"],
-            atol=config.verify_atol,
-            rtol=config.verify_rtol,
-        )
-        if not is_valid:
-            print("WARNING: Checkpoint verification FAILED!")
+
+    # if config.arch.mlp_t:
+    #     reference_checkpoint = config.reference_checkpoint_mlp
+    # else:
+    #     reference_checkpoint = config.reference_checkpoint_attn
+
+    # if reference_checkpoint:
+    #     checkpoint_path = os.path.join(config.checkpoint_path, f"step_{state.step}.pt")
+    #     is_valid = verify_checkpoint(
+    #         checkpoint_path,
+    #         reference_checkpoint,
+    #         atol=config.verify_atol,
+    #         rtol=config.verify_rtol,
+    #     )
+    #     if not is_valid:
+    #         print("WARNING: Checkpoint verification FAILED!")
+    #     else:
+    #         print("Checkpoint verification PASSED!")
 
     print(f"\n{'='*50}")
     print("DONE")

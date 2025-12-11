@@ -7,9 +7,10 @@ import torch.nn.functional as F
 from torch import nn
 from pydantic import BaseModel
 import random
-from models.common import trunc_normal_init_
-from models.layers import rms_norm, LinearSwish, SwiGLU, Attention, RotaryEmbedding, CosSin, CastedEmbedding, CastedLinear
-from models.sparse_embedding import CastedSparseEmbedding
+from models_optim.common import trunc_normal_init_
+from models_optim.layers import rms_norm, LinearSwish, SwiGLU, Attention, RotaryEmbedding, CosSin, CastedEmbedding, CastedLinear
+from models_optim.sparse_embedding import CastedSparseEmbedding
+from torch.utils.checkpoint import checkpoint
 
 IGNORE_LABEL_ID = -100
 
@@ -212,7 +213,10 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
                 z_H = self.L_level(z_H, z_L, **seq_info)
         # 1 with grad
         for _L_step in range(self.config.L_cycles):
-            z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
+            if self.training:
+                z_L = checkpoint(lambda: self.L_level(z_L, z_H + input_embeddings, **seq_info), use_reentrant=False)
+            else:
+                z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
         z_H = self.L_level(z_H, z_L, **seq_info)
 
         # LM Outputs

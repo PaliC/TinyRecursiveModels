@@ -17,6 +17,7 @@ def load_optim_model_class(identifier: str, prefix: str = "models_optim."):
 
     # Import the module
     module = importlib.import_module(prefix + module_path)
+    print(f"Loaded module: {module}")
     cls = getattr(module, class_name)
     
     return cls
